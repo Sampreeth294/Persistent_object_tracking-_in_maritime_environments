@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Secrets and local config
+backend/.env
+
+# Datasets: SMD videos, ground truth, prepared YOLO data (too large for Git)
+data/
+
+# Model weights and uploaded / generated videos
+*.pt
+backend/storage/*
+!backend/storage/.gitkeep
+training/runs/**/weights/
+*.avi
+*.mp4
+*.zip
+*.rar
+
+# Research outputs (regenerate any time)
+research/**/*.csv
+research/**/*.jpg
+research/**/*.png
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store

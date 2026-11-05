@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Bridge-console palette: flat surfaces, hairline borders, one signal accent */
+:root {
+  --deep: 13 24 32;        /* #0D1820 background */
+  --hull: 19 34 44;        /* #13222C panels */
+  --deck: 25 43 55;        /* raised rows / hover */
+  --line: 33 53 66;        /* #213542 hairlines */
+  --fog: 216 225 231;      /* #D8E1E7 primary text */
+  --slate: 125 147 162;    /* #7D93A2 secondary text */
+  --signal: 240 163 58;    /* #F0A33A selection, active */
+  --starboard: 61 180 137; /* #3DB489 good / running */
+  --port: 226 75 79;       /* #E24B4F lost / failed */
+  --sky: 120 170 210;      /* horizon line */
+  color-scheme: dark;
+}
+
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-deep text-fog font-sans antialiased;
+    font-size: 13px;
+  }
+  .tabular { font-variant-numeric: tabular-nums; }
+  ::selection { background: rgb(var(--signal) / 0.35); }
+  *:focus-visible { outline: 1px solid rgb(var(--signal)); outline-offset: 1px; }
+}
+
+@layer components {
+  .panel { @apply bg-hull border border-line rounded; }
+  .panel-head {
+    @apply flex items-center justify-between px-3 h-9 border-b border-line text-2xs uppercase tracking-[0.08em] text-slate;
+  }
+  .btn {
+    @apply inline-flex items-center gap-1.5 h-7 px-2.5 rounded border border-line text-fog
+           hover:bg-deck disabled:opacity-40 disabled:pointer-events-none transition-colors;
+  }
+  .btn-primary { @apply border-signal/60 text-signal hover:bg-signal/10; }
+  .btn-danger { @apply hover:border-port/60 hover:text-port; }
+  .field {
+    @apply h-7 w-full rounded border border-line bg-deep px-2 text-fog tabular font-mono text-xs
+           focus:border-signal/70 focus:outline-none;
+  }
+  .label { @apply text-2xs uppercase tracking-[0.08em] text-slate; }
+  .mono { @apply font-mono tabular; }
+  .table-head th {
+    @apply text-left font-normal text-2xs uppercase tracking-[0.08em] text-slate px-3 h-8 border-b border-line;
+  }
+  .table-row td { @apply px-3 h-9 border-b border-line/60; }
+  .table-row:hover td { @apply bg-deck/60; }
+}
