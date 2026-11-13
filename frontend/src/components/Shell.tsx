@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, Film, LayoutGrid } from "lucide-react";
+import { Activity, Columns3, Film, LayoutGrid } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 import { api } from "../lib/api";
 
@@ -7,6 +7,7 @@ const NAV = [
   { to: "/", label: "Overview", icon: LayoutGrid, end: true },
   { to: "/videos", label: "Videos", icon: Film, end: false },
   { to: "/jobs", label: "Tracking runs", icon: Activity, end: false },
+  { to: "/compare", label: "Compare", icon: Columns3, end: false },
 ];
 
 function SystemStrip() {

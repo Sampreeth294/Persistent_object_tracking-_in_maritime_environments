@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import analytics, health, jobs, videos
+from app.api import analytics, compare, health, jobs, videos
 from app.core.config import settings
 from app.core.logging import setup_logging
 from app.database.mongo import ensure_indexes, ping
@@ -35,5 +35,5 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for r in (health.router, videos.router, jobs.router, analytics.router):
+for r in (health.router, videos.router, jobs.router, analytics.router, compare.router):
     app.include_router(r, prefix="/api")

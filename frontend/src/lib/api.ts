@@ -31,6 +31,17 @@ export interface JobStats {
   short_tracks: number;
   horizon_trusted_ratio: number;
   cmc_applied_ratio: number;
+  confirmed_vessels?: number;
+  confirm_min_detections?: number;
+  peak_in_frame?: number;
+  mean_in_frame?: number;
+}
+
+export interface LiveState {
+  in_frame: number;
+  ids_so_far: number;
+  peak: number;
+  frame: number;
 }
 
 export interface Job {
@@ -51,6 +62,7 @@ export interface Job {
   finished_at: string | null;
   has_output: boolean;
   stats?: JobStats;
+  live?: LiveState;
   timing_ms?: { detector_per_frame: number; tracker_per_frame: number };
   tracker_config?: Record<string, unknown>;
 }
@@ -75,6 +87,44 @@ export interface TrackSummary {
   gap_frames: number;
   longest_gap: number;
   recovery_events: RecoveryEvent[];
+  has_photo?: boolean;
+  photo_frame?: number | null;
+  photo_conf?: number | null;
+  confirmed?: boolean;
+}
+
+export interface CountPoint {
+  frame: number;
+  n: number;
+}
+
+export interface CompareRun {
+  tracker: string;
+  job: null | {
+    id: string;
+    created_at: string;
+    fps_measured: number | null;
+    frames_done: number;
+    stats: JobStats;
+    timing_ms?: { detector_per_frame: number; tracker_per_frame: number };
+    config: JobConfig;
+    device?: string;
+  };
+}
+
+export interface Comparison {
+  video: { id: string; filename: string; frame_count: number; fps: number };
+  runs: CompareRun[];
+  mismatched_settings: string[];
+}
+
+export interface LatestRun {
+  job_id: string;
+  tracker: string;
+  video: string | null;
+  finished_at: string | null;
+  stats: JobStats | null;
+  vessels: { track_id: number; n_detections: number; mean_conf: number; duration_s: number | null; n_gaps: number }[];
 }
 
 export interface TrackDetail extends TrackSummary {
@@ -103,6 +153,7 @@ export interface TrackerInfo {
 }
 
 export interface Summary {
+  latest_run: LatestRun | null;
   videos: number;
   jobs: Record<JobStatus, number>;
   vessel_tracks: number;
@@ -179,6 +230,11 @@ export const api = {
   tracks: (jobId: string) => request<TrackSummary[]>(`/jobs/${jobId}/tracks`),
   track: (jobId: string, trackId: number) => request<TrackDetail>(`/jobs/${jobId}/tracks/${trackId}`),
   horizon: (jobId: string, step = 5) => request<HorizonPoint[]>(`/jobs/${jobId}/horizon?step=${step}`),
+  counts: (jobId: string, step = 1) => request<CountPoint[]>(`/jobs/${jobId}/counts?step=${step}`),
+  liveUrl: (jobId: string, tick: number) => `${BASE}/jobs/${jobId}/live?t=${tick}`,
+  photoUrl: (jobId: string, trackId: number) => `${BASE}/jobs/${jobId}/tracks/${trackId}/photo`,
+  compare: (videoId: string) => request<Comparison>(`/compare?video_id=${videoId}`),
+  compareVideos: () => request<{ id: string; filename: string; trackers: string[] }[]>("/compare/videos"),
   outputUrl: (jobId: string) => `${BASE}/jobs/${jobId}/output`,
   exportUrl: (jobId: string, format: "csv" | "json" | "mot") => `${BASE}/jobs/${jobId}/export?format=${format}`,
 };

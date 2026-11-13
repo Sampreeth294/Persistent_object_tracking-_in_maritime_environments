@@ -2,8 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Download, Square } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ConfidenceTrace, HorizonTrace } from "../components/Charts";
+import { ConfidenceTrace, CountTrace, HorizonTrace } from "../components/Charts";
 import TrackRibbon from "../components/TrackRibbon";
+import VesselGallery from "../components/VesselGallery";
 import { Empty, ErrorLine, Panel, ProgressLine, Readout, StatusPill, VesselTag } from "../components/ui";
 import { api, type Job, type Video } from "../lib/api";
 import { elapsed, fmtDuration, fmtPct, idColour } from "../lib/format";
@@ -76,25 +77,62 @@ function Workspace({ job, video }: { job: Job; video: Video }) {
 function LiveProgress({ job }: { job: Job }) {
   const total = job.frames_total ?? 0;
   const eta = job.fps_measured && total ? (total - job.frames_done) / job.fps_measured : null;
+  const running = job.status === "running";
+  const [tick, setTick] = useState(0);
+  const [hasFrame, setHasFrame] = useState(false);
+
+  // Re-request the live image about once a second while the job runs
+  useEffect(() => {
+    if (!running) return;
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [running]);
+
   return (
-    <Panel title={job.status === "queued" ? "Waiting in queue" : "Processing"}>
-      <div className="p-4 flex flex-col gap-4">
-        <ProgressLine value={job.progress} status={job.status} />
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <Readout label="Frame" value={`${job.frames_done.toLocaleString("en-IN")} / ${total ? total.toLocaleString("en-IN") : "?"}`} />
-          <Readout label="Progress" value={(job.progress * 100).toFixed(1)} unit="%" tone="signal" />
-          <Readout label="Speed" value={job.fps_measured ?? "—"} unit="fps" />
-          <Readout label="Remaining" value={eta == null ? "—" : fmtDuration(eta)} />
-          <Readout label="Device" value={(job.device ?? "—").toUpperCase()} />
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,1fr)] gap-4">
+      <Panel title={
+        <span className="flex items-center gap-2">
+          {running && <span className="h-1.5 w-1.5 rounded-full bg-port animate-pulse" />}
+          {running ? "Live view" : "Waiting in queue"}
+        </span>
+      } right={job.live && <span className="mono normal-case tracking-normal">frame <span className="text-fog">{job.live.frame}</span></span>}>
+        <div className="relative aspect-video bg-black flex items-center justify-center">
+          {running && (
+            <img src={api.liveUrl(job.id, tick)} alt="Latest processed frame"
+              onLoad={() => setHasFrame(true)} onError={() => setHasFrame(false)}
+              className={`w-full h-full object-contain ${hasFrame ? "" : "invisible"}`} />
+          )}
+          {!hasFrame && (
+            <span className="absolute mono text-xs text-slate">
+              {running ? "waiting for the first processed frame…" : "this run starts when the one before it finishes"}
+            </span>
+          )}
         </div>
-      </div>
-    </Panel>
+      </Panel>
+
+      <Panel title={job.status === "queued" ? "Queued" : "Processing"}>
+        <div className="p-4 flex flex-col gap-5">
+          <ProgressLine value={job.progress} status={job.status} />
+          <div className="grid grid-cols-2 gap-x-4 gap-y-5">
+            <Readout label="Vessels in frame" value={job.live?.in_frame ?? "—"} tone="signal" />
+            <Readout label="Peak so far" value={job.live?.peak ?? "—"} />
+            <Readout label="IDs so far" value={job.live?.ids_so_far ?? "—"} />
+            <Readout label="Progress" value={(job.progress * 100).toFixed(1)} unit="%" />
+            <Readout label="Frame" value={`${job.frames_done.toLocaleString("en-IN")} / ${total ? total.toLocaleString("en-IN") : "?"}`} />
+            <Readout label="Speed" value={job.fps_measured ?? "—"} unit="fps" />
+            <Readout label="Remaining" value={eta == null ? "—" : fmtDuration(eta)} />
+            <Readout label="Device" value={(job.device ?? "—").toUpperCase()} />
+          </div>
+        </div>
+      </Panel>
+    </div>
   );
 }
 
 function Results({ job, video }: { job: Job; video: Video }) {
   const tracks = useQuery({ queryKey: ["tracks", job.id], queryFn: () => api.tracks(job.id) });
   const horizon = useQuery({ queryKey: ["horizon", job.id], queryFn: () => api.horizon(job.id), enabled: job.tracker === "horizon" });
+  const counts = useQuery({ queryKey: ["counts", job.id], queryFn: () => api.counts(job.id) });
   const [selected, setSelected] = useState<number | null>(null);
   const [frame, setFrame] = useState(0);
   const player = useRef<HTMLVideoElement>(null);
@@ -154,9 +192,11 @@ function Results({ job, video }: { job: Job; video: Video }) {
         <div className="flex flex-col gap-4">
           <Panel title="Run summary">
             <div className="grid grid-cols-3 gap-x-4 gap-y-4 p-4">
+              <Readout label="Confirmed vessels" value={s?.confirmed_vessels ?? "—"} tone="signal" />
+              <Readout label="Peak in frame" value={s?.peak_in_frame ?? "—"} />
+              <Readout label="Mean in frame" value={s?.mean_in_frame ?? "—"} />
               <Readout label="Vessel IDs" value={s?.n_tracks ?? "—"} />
               <Readout label="Gaps" value={s?.n_gaps ?? "—"} tone={s?.n_gaps ? "port" : undefined} />
-              <Readout label="Recovered" value={s?.n_recoveries ?? "—"} tone="signal" />
               <Readout label="Short (<10)" value={s?.short_tracks ?? "—"} />
               <Readout label="Speed" value={job.fps_measured ?? "—"} unit="fps" />
               <Readout label="Run time" value={fmtDuration(elapsed(job.started_at, job.finished_at))} />
@@ -165,8 +205,8 @@ function Results({ job, video }: { job: Job; video: Video }) {
               <Readout label="Device" value={(job.device ?? "—").toUpperCase()} />
             </div>
             <p className="px-4 pb-3 text-2xs text-slate leading-relaxed">
-              Counts describe this run's output. They are not accuracy — a tracker can score fewer gaps by merging two vessels into one ID.
-              Compare HOTA / IDF1 against ground truth for that.
+              <span className="text-fog">Confirmed</span> = an ID tracked in ≥ {s?.confirm_min_detections ?? 25} frames. IDs over-count ships when
+              one vessel loses its ID and gets a new one. These are counts, not accuracy — compare HOTA / IDF1 against ground truth for that.
             </p>
           </Panel>
           <Panel title="Configuration">
@@ -196,6 +236,24 @@ function Results({ job, video }: { job: Job; video: Video }) {
         </Panel>
       )}
 
+      <Panel title="Vessels in frame over time" right={<span className="mono normal-case tracking-normal">
+        peak <span className="text-fog">{s?.peak_in_frame ?? "—"}</span> · mean <span className="text-fog">{s?.mean_in_frame ?? "—"}</span>
+      </span>}>
+        <div className="p-3">
+          {counts.data ? (
+            <CountTrace points={counts.data} totalFrames={total} playhead={frame} onSeek={seek} peak={s?.peak_in_frame ?? Math.max(1, ...counts.data.map((c) => c.n))} />
+          ) : <span className="text-slate text-xs">loading…</span>}
+        </div>
+      </Panel>
+
+      <Panel title={`Vessel gallery · ${s?.confirmed_vessels ?? "?"} confirmed of ${tracks.data?.length ?? 0} IDs`}>
+        {tracks.data && tracks.data.length > 0 ? (
+          <VesselGallery jobId={job.id} tracks={tracks.data} selected={selected}
+            onSelect={(id) => { setSelected(id); const t = tracks.data!.find((x) => x.track_id === id); if (t?.photo_frame != null) seek(t.photo_frame); }}
+            confirmMin={s?.confirm_min_detections ?? 25} />
+        ) : <Empty title="No vessels were tracked in this run" />}
+      </Panel>
+
       <Panel title={`Track ribbon · ${tracks.data?.length ?? 0} vessel IDs`}>
         {tracks.data && tracks.data.length > 0 ? (
           <div className="max-h-[420px] overflow-auto">
@@ -221,7 +279,14 @@ function VesselDetail({ jobId, trackId, fps, onSeek }: { jobId: string; trackId:
   return (
     <Panel title={<span className="flex items-center gap-2 normal-case tracking-normal"><VesselTag id={t.track_id} active /> history</span>}
       right={<button className="normal-case tracking-normal hover:text-fog" onClick={() => onSeek(t.first_frame)}>jump to first sighting →</button>}>
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-4 p-4 border-b border-line">
+      <div className="flex border-b border-line">
+      {t.has_photo && (
+        <button className="shrink-0 w-56 bg-deep border-r border-line flex items-center justify-center p-2"
+          onClick={() => t.photo_frame != null && onSeek(t.photo_frame)} title="Jump to this frame">
+          <img src={api.photoUrl(jobId, t.track_id)} alt={`Vessel ${t.track_id}`} className="max-h-36 max-w-full object-contain" />
+        </button>
+      )}
+      <div className="flex-1 grid grid-cols-2 md:grid-cols-4 gap-4 p-4 content-center">
         <Readout label="First frame" value={t.first_frame} />
         <Readout label="Last frame" value={t.last_frame} />
         <Readout label="Duration" value={t.duration_s ?? "—"} unit="s" />
@@ -230,6 +295,7 @@ function VesselDetail({ jobId, trackId, fps, onSeek }: { jobId: string; trackId:
         <Readout label="Mean conf" value={t.mean_conf.toFixed(3)} />
         <Readout label="Gaps" value={t.n_gaps} tone={t.n_gaps ? "port" : undefined} />
         <Readout label="Longest gap" value={t.longest_gap} unit="fr" />
+      </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-[2fr_1fr] divide-y lg:divide-y-0 lg:divide-x divide-line">
         <div className="p-4">

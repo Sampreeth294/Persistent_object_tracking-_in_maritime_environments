@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router-dom";
 import Shell from "./components/Shell";
 import "./index.css";
+import Compare from "./pages/Compare";
 import JobWorkspace from "./pages/JobWorkspace";
 import Jobs from "./pages/Jobs";
 import Overview from "./pages/Overview";
@@ -22,6 +23,7 @@ const router = createBrowserRouter([
       { path: "videos", element: <Videos /> },
       { path: "jobs", element: <Jobs /> },
       { path: "jobs/:id", element: <JobWorkspace /> },
+      { path: "compare", element: <Compare /> },
     ],
   },
 ]);

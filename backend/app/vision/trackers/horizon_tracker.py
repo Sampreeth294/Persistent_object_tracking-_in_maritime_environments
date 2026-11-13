@@ -1,23 +1,36 @@
-"""Proposed method: horizon-guided tracking (H-CMC).
+"""Proposed method: horizon-guided tracking (H-CMC v2).
 
 BoT-SORT corrects its Kalman predictions with a 2x3 camera-motion warp that it
 estimates by matching feature points between frames. On open water those points
-sit on moving waves, so the estimate is noisy. We replace that estimator with
-one computed from the sea horizon:
+sit on moving waves. We estimate the warp from the sea horizon instead:
 
-    * camera pitch  -> the horizon moves up/down     -> vertical shift
-    * camera roll   -> the horizon tilts             -> rotation
+    * camera pitch  -> the horizon moves up/down -> vertical shift
+    * camera roll   -> the horizon tilts         -> rotation
 
-The horizon is used only when it is trusted (confidence gating):
-    1. enough image strips agree with the line (support >= min_support), and
-    2. the detected vessels are consistent with it: at most `max_violation`
-       of box bottoms may sit above the line (a ship cannot float in the sky).
-If either check fails, the warp is the identity and the tracker behaves like
-plain BoT-SORT without motion compensation — never worse than its fallback.
+v1 (naive) applied the raw frame-to-frame horizon change. Measured on SMD
+MVI_1609 (fixed camera) it DOUBLED vessel IDs (153 vs 76 for ByteTrack):
+the tilt estimate flipped by up to 0.8 deg on ~6% of frames, shifting
+predictions of small distant vessels by ~14 px at the image edge.
+
+v2 adds three rules (each one switchable for the ablation study):
+    1. smoothing   - use the median horizon of the last `smooth_k` trusted frames
+    2. dead-band   - ignore changes below detection noise (deadband_px / deadband_deg);
+                     small real drift accumulates against a fixed reference until it
+                     exceeds the dead-band, so it is not lost
+    3. jump reject - a change larger than max_dy_px / max_dtheta_deg in one frame is
+                     physically implausible -> treated as a detection error. If the new
+                     level persists for `reset_after` frames, it is accepted.
+Plus the confidence gate from v1:
+    * enough image strips agree with the line (support >= min_support), and
+    * at most `max_violation` of vessel boxes sit above the line.
+
+If any rule fails the warp is the identity, i.e. BoT-SORT without motion compensation.
+Set smooth_k=1, deadband_px=0, deadband_deg=0, max_dy_px=1e9, max_dtheta_deg=1e9 to reproduce v1.
 
 Known limit: the horizon cannot see horizontal panning (yaw).
 """
 import math
+from collections import deque
 
 import numpy as np
 
@@ -25,47 +38,90 @@ from app.vision.horizon import detect_horizon, violation_fraction
 from app.vision.trackers.base import FrameState
 from app.vision.trackers.ultralytics_trackers import BotSortTracker
 
+HCMC_DEFAULTS = dict(
+    min_support=0.5,
+    max_violation=0.10,
+    smooth_k=5,
+    deadband_px=1.0,
+    deadband_deg=0.05,
+    max_dy_px=25.0,
+    max_dtheta_deg=0.3,
+    reset_after=5,
+)
+
 
 class HorizonGMC:
     """Drop-in replacement for Ultralytics' GMC: apply(img, dets) -> 2x3 warp."""
 
     method = "horizon"  # Ultralytics skips GMC entirely when method is None
 
-    def __init__(self, min_support=0.5, max_violation=0.10, max_shift_frac=0.10):
-        self.min_support = min_support
-        self.max_violation = max_violation
-        self.max_shift_frac = max_shift_frac
-        self.prev: dict | None = None
+    def __init__(self, **params):
+        self.p = {**HCMC_DEFAULTS, **params}
         self.state = FrameState()
+        self.reset_params()
 
     def reset_params(self):
-        self.prev = None
+        self.buffer: deque = deque(maxlen=int(self.p["smooth_k"]))
+        self.ref: dict | None = None        # horizon at the last applied correction
+        self.rejected_run: list = []        # consecutive jump-rejected horizons
+
+    def _smoothed(self) -> dict:
+        y = float(np.median([b["y_center"] for b in self.buffer]))
+        ang = float(np.median([b["angle_deg"] for b in self.buffer]))
+        return {"y_center": y, "angle_deg": ang, "slope": math.tan(math.radians(ang))}
 
     def apply(self, img, dets=None):
         h, w = img.shape[:2]
-        horizon = detect_horizon(img)
-        state = FrameState(horizon=horizon)
-
-        trusted = False
-        if horizon is not None and horizon["support"] >= self.min_support:
-            boxes = _dets_to_xyxy(dets)
-            viol = violation_fraction(horizon, boxes, w)
-            state.extra["violation"] = round(viol, 3)
-            trusted = viol <= self.max_violation
-        state.horizon_trusted = trusted
-
+        raw = detect_horizon(img)
+        state = FrameState(horizon=raw)
+        state.extra["reason"] = "no horizon"
         warp = np.eye(2, 3)
-        if trusted and self.prev is not None:
-            dy = horizon["y_center"] - self.prev["y_center"]
-            if abs(dy) <= self.max_shift_frac * h:
-                warp = _horizon_warp(self.prev, horizon, w)
-                state.cmc_applied = True
-                state.extra["dy"] = round(float(dy), 2)
 
-        if trusted:
-            self.prev = horizon
+        # 1. Confidence gate on this frame's raw horizon
+        if raw is not None and raw["support"] >= self.p["min_support"]:
+            viol = violation_fraction(raw, _dets_to_xyxy(dets), w)
+            state.extra["violation"] = round(viol, 3)
+            state.horizon_trusted = viol <= self.p["max_violation"]
+            state.extra["reason"] = "trusted" if state.horizon_trusted else "vessel above line"
+        elif raw is not None:
+            state.extra["reason"] = "low support"
+
+        if state.horizon_trusted:
+            # 2. Jump rejection against the current smoothed level
+            if self.buffer and self._is_jump(raw, self._smoothed()):
+                self.rejected_run.append(raw)
+                state.extra["reason"] = "jump rejected"
+                if len(self.rejected_run) >= self.p["reset_after"]:   # the new level persisted: accept it
+                    self.buffer.clear()
+                    self.buffer.extend(self.rejected_run[-self.buffer.maxlen:])
+                    self.rejected_run = []
+                    self.ref = self._smoothed()
+                    state.extra["reason"] = "level reset"
+            else:
+                self.rejected_run = []
+                self.buffer.append(raw)
+                smooth = self._smoothed()
+                state.horizon = {**smooth, "support": raw["support"]}
+                if self.ref is None:
+                    self.ref = smooth
+                else:
+                    # 3. Dead-band: correct only once the change exceeds detection noise
+                    dy = smooth["y_center"] - self.ref["y_center"]
+                    dth = smooth["angle_deg"] - self.ref["angle_deg"]
+                    if abs(dy) >= self.p["deadband_px"] or abs(dth) >= self.p["deadband_deg"]:
+                        warp = _horizon_warp(self.ref, smooth, w)
+                        state.cmc_applied = True
+                        state.extra.update(dy=round(dy, 2), dtheta=round(dth, 4))
+                        self.ref = smooth
+                    else:
+                        state.extra["reason"] = "below dead-band"
+
         self.state = state
         return warp
+
+    def _is_jump(self, raw: dict, smooth: dict) -> bool:
+        return (abs(raw["y_center"] - smooth["y_center"]) > self.p["max_dy_px"]
+                or abs(raw["angle_deg"] - smooth["angle_deg"]) > self.p["max_dtheta_deg"])
 
 
 def _dets_to_xyxy(dets) -> np.ndarray:
@@ -100,11 +156,12 @@ def _horizon_warp(prev: dict, curr: dict, width: int) -> np.ndarray:
 class HorizonTracker(BotSortTracker):
     name = "horizon"
 
-    def __init__(self, frame_rate: int = 30, min_support=0.5, max_violation=0.10, **overrides):
-        super().__init__(frame_rate=frame_rate, gmc_method="none", **overrides)
-        self.gmc = HorizonGMC(min_support=min_support, max_violation=max_violation)
+    def __init__(self, frame_rate: int = 30, **params):
+        hcmc = {k: params.pop(k) for k in list(params) if k in HCMC_DEFAULTS}
+        super().__init__(frame_rate=frame_rate, gmc_method="none", **params)
+        self.gmc = HorizonGMC(**hcmc)
         self._impl.gmc = self.gmc  # swap the feature-point estimator for ours
-        self.config.update(gmc_method="horizon", min_support=min_support, max_violation=max_violation)
+        self.config.update(gmc_method="horizon-v2", **self.gmc.p)
 
     @property
     def frame_state(self) -> FrameState:

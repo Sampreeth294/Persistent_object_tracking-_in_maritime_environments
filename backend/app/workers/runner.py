@@ -23,6 +23,7 @@ from app.services.track_builder import TrackBuilder
 from app.utils.ids import now
 from app.vision import detector
 from app.vision.annotate import Annotator
+from app.vision.gallery import VesselGallery, save_live_frame
 from app.vision.horizon import pseudo_depth
 from app.vision.trackers.factory import build_tracker
 
@@ -33,6 +34,8 @@ _thread: threading.Thread | None = None
 
 FRAME_BATCH = 100       # write frame documents to MongoDB in batches
 PROGRESS_EVERY = 15     # update progress / check cancel every N frames
+LIVE_EVERY = 5          # refresh the live preview image every N frames
+CONFIRM_MIN_DETECTIONS = 25  # a vessel ID seen in >= 25 frames (1 s at 25 fps) counts as confirmed
 
 
 class Cancelled(Exception):
@@ -112,10 +115,14 @@ def _process(job: dict, job_id: str, out_dir: Path) -> dict:
     writer = cv2.VideoWriter(str(raw_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h))
     annotator = Annotator()
     builder = TrackBuilder()
+    gallery = VesselGallery(out_dir)
+    live_path = out_dir / "live.jpg"
 
     batch, idx = [], 0
     det_time = trk_time = 0.0
     trusted_frames = cmc_frames = 0
+    counts: list[int] = []          # vessels tracked in each frame
+    seen_ids: set[int] = set()
     t_start = time.perf_counter()
 
     try:
@@ -156,7 +163,14 @@ def _process(job: dict, job_id: str, out_dir: Path) -> dict:
                 "cmc_applied": state.cmc_applied,
             })
 
-            writer.write(annotator.draw(frame, tracks, state.horizon, state.horizon_trusted, idx))
+            gallery.update(frame, idx, tracks)          # crop from the clean frame, before drawing
+            counts.append(len(tracks))
+            seen_ids.update(t.track_id for t in tracks)
+
+            annotated = annotator.draw(frame, tracks, state.horizon, state.horizon_trusted, idx)
+            writer.write(annotated)
+            if idx % LIVE_EVERY == 0:
+                save_live_frame(live_path, annotated)
             idx += 1
 
             if len(batch) >= FRAME_BATCH:
@@ -168,13 +182,22 @@ def _process(job: dict, job_id: str, out_dir: Path) -> dict:
                 elapsed = time.perf_counter() - t_start
                 jobs_repo.update(job_id, frames_done=idx,
                                  progress=round(idx / max(1, min(total, max_frames)), 4),
-                                 fps_measured=round(idx / elapsed, 2))
+                                 fps_measured=round(idx / elapsed, 2),
+                                 live={"in_frame": counts[-1], "ids_so_far": len(seen_ids),
+                                       "peak": max(counts), "frame": idx - 1})
     finally:
         cap.release()
         writer.release()
 
     tracks_repo.insert_frames(batch)
     track_docs = builder.build(job_id, fps)
+    best = gallery.best_frames()
+    for t in track_docs:
+        b = best.get(t["track_id"])
+        t["has_photo"] = b is not None
+        t["photo_frame"] = b["frame"] if b else None
+        t["photo_conf"] = round(b["conf"], 4) if b else None
+        t["confirmed"] = t["n_detections"] >= CONFIRM_MIN_DETECTIONS
     tracks_repo.insert_tracks(track_docs)
 
     output_path = _to_browser_mp4(raw_path, out_dir / "annotated.mp4")
@@ -192,6 +215,10 @@ def _process(job: dict, job_id: str, out_dir: Path) -> dict:
             "n_gaps": sum(t["n_gaps"] for t in track_docs),
             "n_recoveries": sum(len(t["recovery_events"]) for t in track_docs),
             "short_tracks": sum(1 for t in track_docs if t["n_detections"] < 10),
+            "confirmed_vessels": sum(1 for t in track_docs if t["confirmed"]),
+            "confirm_min_detections": CONFIRM_MIN_DETECTIONS,
+            "peak_in_frame": max(counts) if counts else 0,
+            "mean_in_frame": round(sum(counts) / len(counts), 2) if counts else 0,
             "horizon_trusted_ratio": round(trusted_frames / idx, 4) if idx else 0,
             "cmc_applied_ratio": round(cmc_frames / idx, 4) if idx else 0,
         },

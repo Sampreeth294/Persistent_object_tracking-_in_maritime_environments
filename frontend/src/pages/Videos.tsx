@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play, Plus, Trash2 } from "lucide-react";
+import { Columns3, Play, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import NewRunDialog from "../components/NewRunDialog";
 import { PageHead } from "../components/Shell";
 import UploadDrawer from "../components/UploadDrawer";
@@ -66,6 +67,7 @@ export default function Videos() {
                     <td>
                       <div className="flex justify-end gap-1.5">
                         <button className="btn btn-primary" onClick={() => setRunFor(v)}><Play size={13} />Track</button>
+                        <Link className="btn" to={`/compare?video=${v.id}`}><Columns3 size={13} />Compare</Link>
                         <button
                           className="btn btn-danger" aria-label="Delete video"
                           disabled={remove.isPending}

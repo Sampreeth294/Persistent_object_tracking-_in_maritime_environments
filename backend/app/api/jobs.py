@@ -1,8 +1,9 @@
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
+from app.core.config import settings
 from app.repositories import jobs as jobs_repo
 from app.repositories import tracks as tracks_repo
 from app.schemas.jobs import JobCreate
@@ -84,6 +85,40 @@ def horizon_series(job_id: str, step: int = Query(5, ge=1, le=100)):
             "trusted": f.get("horizon_trusted", False),
             "cmc": f.get("cmc_applied", False),
         })
+    return out
+
+
+NO_CACHE = {"Cache-Control": "no-store, max-age=0"}
+
+
+@router.get("/{job_id}/live")
+def live_frame(job_id: str):
+    """Latest annotated frame while the job runs (refreshed every few frames)."""
+    _require(job_id)
+    path = settings.outputs_dir / job_id / "live.jpg"
+    if not path.exists():
+        raise HTTPException(404, "No live frame yet")
+    return FileResponse(path, media_type="image/jpeg", headers=NO_CACHE)
+
+
+@router.get("/{job_id}/tracks/{track_id}/photo")
+def vessel_photo(job_id: str, track_id: int):
+    """Clearest crop of one vessel (its highest-confidence detection)."""
+    _require(job_id)
+    path = settings.outputs_dir / job_id / "crops" / f"{track_id}.jpg"
+    if not path.exists():
+        raise HTTPException(404, "No photo for this vessel")
+    return FileResponse(path, media_type="image/jpeg", headers=NO_CACHE)
+
+
+@router.get("/{job_id}/counts")
+def counts(job_id: str, step: int = Query(1, ge=1, le=100)):
+    """Vessels tracked in each frame — the 'how many ships' chart."""
+    _require(job_id)
+    out = []
+    for f in tracks_repo.iter_frames(job_id):
+        if f["frame_idx"] % step == 0:
+            out.append({"frame": f["frame_idx"], "n": len(f.get("detections", []))})
     return out
 
 

@@ -1,4 +1,50 @@
-import type { HorizonPoint } from "../lib/api";
+import type { MouseEvent } from "react";
+import type { CountPoint, HorizonPoint } from "../lib/api";
+
+/** Vessels tracked in each frame. Click to seek; the amber line follows the video. */
+export function CountTrace({ points, totalFrames, playhead, onSeek, peak }: {
+  points: CountPoint[]; totalFrames: number; playhead: number; onSeek: (f: number) => void; peak: number;
+}) {
+  const W = 1000, H = 120;
+  const top = Math.max(peak, 1);
+  const x = (f: number) => (f / Math.max(totalFrames, 1)) * W;
+  const y = (n: number) => H - (n / top) * (H - 6);
+  let d = "";
+  points.forEach((p, i) => {
+    d += i === 0 ? `M${x(p.frame)},${y(p.n)}` : `H${x(p.frame)}V${y(p.n)}`;
+  });
+  if (points.length) d += `H${W}`;
+  const area = points.length ? `${d}V${H}H${x(points[0].frame)}Z` : "";
+  const current = points.length ? points[Math.min(points.length - 1, Math.max(0, Math.round((playhead / Math.max(totalFrames, 1)) * (points.length - 1))))].n : 0;
+  const ticks = Array.from(new Set([0, Math.round(top / 2), top]));
+
+  const seek = (e: MouseEvent<HTMLDivElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    onSeek(Math.round(((e.clientX - r.left) / r.width) * totalFrames));
+  };
+
+  return (
+    <div className="flex gap-2">
+      <div className="relative w-6 mono text-2xs text-slate">
+        {ticks.map((t) => (
+          <span key={t} className="absolute right-0 -translate-y-1/2" style={{ top: `${(y(t) / H) * 100}%` }}>{t}</span>
+        ))}
+      </div>
+      <div className="relative flex-1 cursor-crosshair" onClick={seek}>
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="block w-full h-[120px]">
+          {ticks.map((t) => (
+            <line key={t} x1={0} x2={W} y1={y(t)} y2={y(t)} stroke="rgb(var(--line))" vectorEffect="non-scaling-stroke" />
+          ))}
+          <path d={area} fill="rgb(var(--sky) / 0.12)" />
+          <path d={d} fill="none" stroke="rgb(var(--sky))" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+        </svg>
+        <div className="pointer-events-none absolute inset-y-0 w-px bg-signal" style={{ left: `${(playhead / Math.max(totalFrames, 1)) * 100}%` }}>
+          <span className="absolute bottom-1 left-1.5 mono text-2xs text-signal bg-deep/90 px-1 whitespace-nowrap">{current} in frame</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Confidence over frames for one vessel. Gaps in tracking show as breaks in the line. */
 export function ConfidenceTrace({ points, from, to, colour }: {

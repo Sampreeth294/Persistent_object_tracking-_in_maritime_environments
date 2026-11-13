@@ -30,7 +30,25 @@ def summary() -> dict:
             "recoveries": row["recoveries"],
         }
 
+    latest = None
+    last_job = next(iter(jobs_repo.list_all(status="completed", limit=1)), None)
+    if last_job:
+        job_id = str(last_job["_id"])
+        video = videos_repo.get(last_job["video_id"])
+        vessels = [t for t in tracks_repo.list_tracks(job_id) if t.get("has_photo") and t.get("confirmed")]
+        vessels.sort(key=lambda t: t["n_detections"], reverse=True)
+        latest = {
+            "job_id": job_id,
+            "tracker": last_job["tracker"],
+            "video": video["filename"] if video else None,
+            "finished_at": last_job.get("finished_at"),
+            "stats": last_job.get("stats"),
+            "vessels": [{k: t[k] for k in ("track_id", "n_detections", "mean_conf", "duration_s", "n_gaps")}
+                        for t in vessels[:12]],
+        }
+
     return {
+        "latest_run": latest,
         "videos": videos_repo.count(),
         "jobs": jobs,
         "vessel_tracks": tracks_repo.count_tracks(),
