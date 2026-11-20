@@ -2,18 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Bridge-console palette: flat surfaces, hairline borders, one signal accent */
+/* Night-watch palette: deep navy surfaces, cyan for actions, amber reserved for the horizon tracker & playhead */
 :root {
-  --deep: 13 24 32;        /* #0D1820 background */
-  --hull: 19 34 44;        /* #13222C panels */
-  --deck: 25 43 55;        /* raised rows / hover */
-  --line: 33 53 66;        /* #213542 hairlines */
-  --fog: 216 225 231;      /* #D8E1E7 primary text */
-  --slate: 125 147 162;    /* #7D93A2 secondary text */
-  --signal: 240 163 58;    /* #F0A33A selection, active */
-  --starboard: 61 180 137; /* #3DB489 good / running */
-  --port: 226 75 79;       /* #E24B4F lost / failed */
-  --sky: 120 170 210;      /* horizon line */
+  --deep: 8 14 24;          /* #080E18 page background */
+  --hull: 14 23 37;         /* #0E1725 cards */
+  --deck: 22 34 52;         /* #162234 raised / hover */
+  --line: 34 50 72;         /* #223248 borders */
+  --fog: 228 234 242;       /* primary text */
+  --slate: 136 153 176;     /* secondary text */
+  --accent: 56 189 248;     /* #38BDF8 primary action */
+  --signal: 245 166 35;     /* #F5A623 horizon / playhead */
+  --starboard: 52 211 153;  /* #34D399 good / completed */
+  --port: 248 113 113;      /* #F87171 lost / failed */
+  --sky: 120 175 230;       /* charts */
   color-scheme: dark;
 }
 
@@ -21,33 +22,58 @@
   html, body, #root { height: 100%; }
   body {
     @apply bg-deep text-fog font-sans antialiased;
-    font-size: 13px;
+    font-size: 14px;
+    background-image:
+      radial-gradient(1200px 600px at 100% -10%, rgb(var(--accent) / 0.07), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgb(var(--signal) / 0.04), transparent 60%);
+    background-attachment: fixed;
   }
   .tabular { font-variant-numeric: tabular-nums; }
-  ::selection { background: rgb(var(--signal) / 0.35); }
-  *:focus-visible { outline: 1px solid rgb(var(--signal)); outline-offset: 1px; }
+  ::selection { background: rgb(var(--accent) / 0.35); }
+  *:focus-visible { outline: 2px solid rgb(var(--accent) / 0.8); outline-offset: 2px; border-radius: 6px; }
+  * { scrollbar-width: thin; scrollbar-color: rgb(var(--line)) transparent; }
+  input[type="number"]::-webkit-inner-spin-button { opacity: 0.4; }
 }
 
 @layer components {
-  .panel { @apply bg-hull border border-line rounded; }
+  .panel { @apply bg-hull/90 border border-line rounded-xl shadow-card overflow-hidden; }
   .panel-head {
-    @apply flex items-center justify-between px-3 h-9 border-b border-line text-2xs uppercase tracking-[0.08em] text-slate;
+    @apply flex items-center justify-between gap-3 px-4 min-h-12 py-2 border-b border-line text-sm font-semibold text-fog;
   }
+  .panel-sub { @apply text-xs font-normal text-slate; }
+
   .btn {
-    @apply inline-flex items-center gap-1.5 h-7 px-2.5 rounded border border-line text-fog
-           hover:bg-deck disabled:opacity-40 disabled:pointer-events-none transition-colors;
+    @apply inline-flex items-center justify-center gap-2 h-9 px-3.5 rounded-lg border border-line bg-deck/50
+           text-sm font-medium text-fog whitespace-nowrap select-none
+           hover:bg-deck hover:border-slate/40 active:translate-y-px
+           disabled:opacity-40 disabled:pointer-events-none transition;
   }
-  .btn-primary { @apply border-signal/60 text-signal hover:bg-signal/10; }
-  .btn-danger { @apply hover:border-port/60 hover:text-port; }
+  .btn-sm { @apply h-8 px-2.5 text-xs gap-1.5; }
+  .btn-icon { @apply w-9 px-0; }
+  .btn-sm.btn-icon { @apply w-8; }
+  .btn-primary { @apply bg-accent border-accent text-deep hover:bg-accent/90 hover:border-accent font-semibold; }
+  .btn-ghost { @apply bg-transparent border-transparent text-slate hover:text-fog hover:bg-deck/70 hover:border-transparent; }
+  .btn-danger { @apply text-port/90 hover:text-port hover:border-port/50 hover:bg-port/10; }
+  .btn-danger-solid { @apply bg-port border-port text-deep hover:bg-port/90 font-semibold; }
+
   .field {
-    @apply h-7 w-full rounded border border-line bg-deep px-2 text-fog tabular font-mono text-xs
-           focus:border-signal/70 focus:outline-none;
+    @apply h-9 w-full rounded-lg border border-line bg-deep/80 px-3 text-sm text-fog tabular
+           placeholder:text-slate/60 focus:border-accent/70 focus:ring-2 focus:ring-accent/20 focus:outline-none transition;
   }
-  .label { @apply text-2xs uppercase tracking-[0.08em] text-slate; }
+  .label { @apply text-xs font-medium text-slate; }
+  .eyebrow { @apply text-2xs font-medium uppercase tracking-[0.1em] text-slate; }
   .mono { @apply font-mono tabular; }
+  .link { @apply text-accent hover:underline underline-offset-2; }
+
+  .table-wrap { @apply overflow-x-auto; }
   .table-head th {
-    @apply text-left font-normal text-2xs uppercase tracking-[0.08em] text-slate px-3 h-8 border-b border-line;
+    @apply text-left font-medium text-2xs uppercase tracking-[0.08em] text-slate px-4 h-10 border-b border-line bg-deck/30 whitespace-nowrap;
   }
-  .table-row td { @apply px-3 h-9 border-b border-line/60; }
-  .table-row:hover td { @apply bg-deck/60; }
+  .table-row td { @apply px-4 h-12 border-b border-line/60 whitespace-nowrap; }
+  .table-row:last-child td { @apply border-b-0; }
+  .table-row:hover td { @apply bg-deck/40; }
+  .table-row.clickable { @apply cursor-pointer; }
+
+  .chip { @apply inline-flex items-center gap-1.5 h-6 px-2 rounded-md border border-line bg-deck/50 text-xs text-slate; }
+  .skeleton { @apply rounded-md bg-deck/80 animate-pulse; }
 }

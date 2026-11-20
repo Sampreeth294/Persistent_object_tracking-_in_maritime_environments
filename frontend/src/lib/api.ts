@@ -226,6 +226,7 @@ export const api = {
   job: (id: string) => request<Job>(`/jobs/${id}`),
   createJob: (body: { video_id: string; tracker: string; config: Partial<JobConfig> }) =>
     request<Job>("/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }),
+  deleteJob: (id: string) => request<void>(`/jobs/${id}`, { method: "DELETE" }),
   cancelJob: (id: string) => request<{ ok: boolean }>(`/jobs/${id}/cancel`, { method: "POST" }),
   tracks: (jobId: string) => request<TrackSummary[]>(`/jobs/${jobId}/tracks`),
   track: (jobId: string, trackId: number) => request<TrackDetail>(`/jobs/${jobId}/tracks/${trackId}`),
@@ -236,5 +237,6 @@ export const api = {
   compare: (videoId: string) => request<Comparison>(`/compare?video_id=${videoId}`),
   compareVideos: () => request<{ id: string; filename: string; trackers: string[] }[]>("/compare/videos"),
   outputUrl: (jobId: string) => `${BASE}/jobs/${jobId}/output`,
+  streamUrl: (videoId: string) => `${BASE}/videos/${videoId}/stream`,
   exportUrl: (jobId: string, format: "csv" | "json" | "mot") => `${BASE}/jobs/${jobId}/export?format=${format}`,
 };

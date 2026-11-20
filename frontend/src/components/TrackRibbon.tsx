@@ -58,18 +58,18 @@ export default function TrackRibbon({ tracks, totalFrames, playhead, selected, o
 
   return (
     <div>
-      <div className="flex items-center justify-between px-3 py-2 border-b border-line">
-        <div className="flex items-center gap-4 text-2xs text-slate">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 border-b border-line sticky top-0 bg-hull z-10">
+        <div className="flex flex-wrap items-center gap-4 text-xs text-slate">
           <span className="flex items-center gap-1.5"><span className="h-1.5 w-4 bg-fog/80 rounded-sm" />tracked</span>
           <span className="flex items-center gap-1.5"><span className="h-px w-4 bg-slate/60" />lost</span>
           <span className="flex items-center gap-1.5"><span className="h-3 w-[2px] bg-signal" />recovered (same ID)</span>
         </div>
-        <label className="flex items-center gap-2 text-2xs text-slate">
+        <label className="flex items-center gap-2 text-xs text-slate">
           hide tracks under
           <input
             type="number" min={1} value={minDets}
             onChange={(e) => setMinDets(Math.max(1, Number(e.target.value) || 1))}
-            className="field w-14 h-6"
+            className="field w-16 h-7 mono"
           />
           detections {hidden > 0 && <span className="mono">({hidden} hidden)</span>}
         </label>
@@ -123,7 +123,7 @@ export default function TrackRibbon({ tracks, totalFrames, playhead, selected, o
             })}
           </svg>
           <div className="pointer-events-none absolute top-0 bottom-0 w-px bg-signal" style={{ left: `${(playhead / Math.max(totalFrames, 1)) * 100}%` }}>
-            <span className="absolute bottom-0 left-1 mono text-2xs text-signal bg-deep/90 px-1">{playhead}</span>
+            <span className="absolute top-0 left-1 mono text-2xs text-signal bg-deep/90 px-1.5 rounded">{playhead}</span>
           </div>
         </div>
       </div>

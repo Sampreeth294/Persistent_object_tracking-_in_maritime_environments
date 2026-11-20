@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Download, Square } from "lucide-react";
+import { ArrowLeft, Download, FileWarning, Repeat, Square, Trash2, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import NewRunDialog from "../components/NewRunDialog";
 import { ConfidenceTrace, CountTrace, HorizonTrace } from "../components/Charts";
 import TrackRibbon from "../components/TrackRibbon";
 import VesselGallery from "../components/VesselGallery";
-import { Empty, ErrorLine, Panel, ProgressLine, Readout, StatusPill, VesselTag } from "../components/ui";
+import { ConfirmDialog, Empty, ErrorLine, Loading, Panel, ProgressLine, Readout, StatusPill, toast, TrackerBadge, VesselTag } from "../components/ui";
 import { api, type Job, type Video } from "../lib/api";
 import { elapsed, fmtDuration, fmtPct, idColour } from "../lib/format";
 
@@ -22,8 +23,15 @@ export default function JobWorkspace() {
     enabled: !!job.data,
   });
 
-  if (job.error) return <div className="p-6"><ErrorLine error={job.error} /></div>;
-  if (!job.data || !video.data) return <div className="p-6 text-slate mono text-xs">loading…</div>;
+  if (job.error || video.error) {
+    return (
+      <div className="p-4 sm:p-8 flex flex-col gap-4">
+        <Link to="/jobs" className="btn btn-ghost self-start"><ArrowLeft size={15} />Back to runs</Link>
+        <ErrorLine error={job.error ?? (video.error && "The video for this run was deleted.")} />
+      </div>
+    );
+  }
+  if (!job.data || !video.data) return <Loading label="Loading run…" />;
 
   return <Workspace job={job.data} video={video.data} />;
 }
@@ -33,41 +41,89 @@ function Workspace({ job, video }: { job: Job; video: Video }) {
   const done = job.status === "completed";
   const active = job.status === "queued" || job.status === "running";
 
-  const cancel = useMutation({
-    mutationFn: () => api.cancelJob(job.id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["job", job.id] }),
+  const nav = useNavigate();
+  const [rerun, setRerun] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const refresh = () => {
+    qc.invalidateQueries({ queryKey: ["job", job.id] });
+    qc.invalidateQueries({ queryKey: ["jobs"] });
+    qc.invalidateQueries({ queryKey: ["summary"] });
+  };
+  const cancel = useMutation({ mutationFn: () => api.cancelJob(job.id), onSuccess: () => { toast("Run cancelled"); refresh(); } });
+  const remove = useMutation({
+    mutationFn: () => api.deleteJob(job.id),
+    onSuccess: () => {
+      toast(`Run #${job.id.slice(-6)} deleted`);
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      qc.invalidateQueries({ queryKey: ["summary"] });
+      qc.invalidateQueries({ queryKey: ["compare-videos"] });
+      nav("/jobs");
+    },
   });
 
   return (
     <div className="pb-10">
-      <div className="flex items-center justify-between gap-4 px-6 pt-5 pb-4">
-        <div className="flex items-center gap-3 min-w-0">
-          <Link to="/jobs" className="text-slate hover:text-fog" aria-label="Back to runs"><ArrowLeft size={16} /></Link>
-          <h1 className="text-lg font-medium mono">#{job.id.slice(-6)}</h1>
-          <StatusPill status={job.status} />
-          <span className={`mono text-xs ${job.tracker === "horizon" ? "text-signal" : "text-slate"}`}>{job.tracker}</span>
-          <span className="text-slate truncate mono text-xs">· {video.filename}</span>
-        </div>
-        <div className="flex items-center gap-1.5">
-          {active && (
-            <button className="btn btn-danger" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
-              <Square size={12} />Cancel
-            </button>
-          )}
-          {done && (["csv", "json", "mot"] as const).map((f) => (
-            <a key={f} className="btn" href={api.exportUrl(job.id, f)}><Download size={13} />{f.toUpperCase()}</a>
-          ))}
-          {done && job.has_output && (
-            <a className="btn" href={api.outputUrl(job.id)} download><Download size={13} />Video</a>
-          )}
+      <div className="px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8 pb-5 flex flex-col gap-4">
+        <Link to="/jobs" className="text-sm text-slate hover:text-fog inline-flex items-center gap-1.5 self-start"><ArrowLeft size={15} />Tracking runs</Link>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0 flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-semibold tracking-tight">Run <span className="mono">#{job.id.slice(-6)}</span></h1>
+              <StatusPill status={job.status} />
+              <TrackerBadge name={job.tracker} />
+            </div>
+            <div className="text-slate text-sm flex flex-wrap gap-x-2">
+              <span className="mono text-fog/90">{video.filename}</span><span>·</span>
+              <span>{video.width}×{video.height}, {video.fps} fps</span><span>·</span>
+              <span>conf {job.config.conf}, imgsz {job.config.imgsz}</span>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {active && (
+              <button className="btn btn-danger" disabled={cancel.isPending} onClick={() => cancel.mutate()}>
+                <Square size={13} />Cancel run
+              </button>
+            )}
+            {!active && (
+              <button className="btn" onClick={() => setRerun(true)} title="Start another run on this video with the same settings">
+                <Repeat size={15} />Run again
+              </button>
+            )}
+            {done && (
+              <div className="flex items-center rounded-lg border border-line overflow-hidden divide-x divide-line">
+                <span className="px-3 h-9 grid place-items-center text-xs text-slate bg-deck/30"><Download size={14} /></span>
+                {(["csv", "json", "mot"] as const).map((f) => (
+                  <a key={f} className="px-3 h-9 grid place-items-center text-sm hover:bg-deck transition-colors" href={api.exportUrl(job.id, f)}>{f.toUpperCase()}</a>
+                ))}
+                {job.has_output && <a className="px-3 h-9 grid place-items-center text-sm hover:bg-deck transition-colors" href={api.outputUrl(job.id)} download>Video</a>}
+              </div>
+            )}
+            {!active && (
+              <button className="btn btn-icon btn-danger" title="Delete run" aria-label="Delete run" onClick={() => { remove.reset(); setDeleting(true); }}>
+                <Trash2 size={15} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
-      <div className="px-6 flex flex-col gap-4">
+      {rerun && (
+        <NewRunDialog video={video} onClose={() => setRerun(false)}
+          preset={{ tracker: job.tracker, config: job.config, note: `Same settings as run #${job.id.slice(-6)} — pick a tracker to compare against.` }} />
+      )}
+      {deleting && (
+        <ConfirmDialog title="Delete this run?" busy={remove.isPending} onClose={() => setDeleting(false)} onConfirm={() => remove.mutate()}>
+          <p>Its tracks, vessel photos and output video are removed permanently. <span className="mono text-fog">{video.filename}</span> itself is kept.</p>
+          {remove.error && <div className="mt-3"><ErrorLine error={remove.error} /></div>}
+        </ConfirmDialog>
+      )}
+
+      <div className="px-4 sm:px-6 lg:px-8 flex flex-col gap-5">
         <ErrorLine error={cancel.error} />
-        {job.status === "failed" && <ErrorLine error={job.error ?? "Run failed"} />}
+        {job.status === "failed" && <ErrorLine error={`Run failed — ${job.error ?? "unknown error"}`} />}
         {active && <LiveProgress job={job} />}
-        {job.status === "cancelled" && <Panel><Empty title="This run was cancelled">Its partial results were removed.</Empty></Panel>}
+        {job.status === "cancelled" && <Panel><Empty title="This run was cancelled" icon={Square}
+          action={<button className="btn btn-primary btn-sm" onClick={() => setRerun(true)}><Repeat size={14} />Run again</button>}>Its partial results were removed.</Empty></Panel>}
         {done && <Results job={job} video={video} />}
       </div>
     </div>
@@ -89,7 +145,7 @@ function LiveProgress({ job }: { job: Job }) {
   }, [running]);
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,1fr)] gap-4">
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(340px,1fr)] gap-5">
       <Panel title={
         <span className="flex items-center gap-2">
           {running && <span className="h-1.5 w-1.5 rounded-full bg-port animate-pulse" />}
@@ -114,7 +170,7 @@ function LiveProgress({ job }: { job: Job }) {
         <div className="p-4 flex flex-col gap-5">
           <ProgressLine value={job.progress} status={job.status} />
           <div className="grid grid-cols-2 gap-x-4 gap-y-5">
-            <Readout label="Vessels in frame" value={job.live?.in_frame ?? "—"} tone="signal" />
+            <Readout label="Vessels in frame" value={job.live?.in_frame ?? "—"} tone="accent" />
             <Readout label="Peak so far" value={job.live?.peak ?? "—"} />
             <Readout label="IDs so far" value={job.live?.ids_so_far ?? "—"} />
             <Readout label="Progress" value={(job.progress * 100).toFixed(1)} unit="%" />
@@ -136,6 +192,7 @@ function Results({ job, video }: { job: Job; video: Video }) {
   const [selected, setSelected] = useState<number | null>(null);
   const [frame, setFrame] = useState(0);
   const player = useRef<HTMLVideoElement>(null);
+  const [videoError, setVideoError] = useState(false);
   const fps = video.fps || 25;
   const total = job.frames_done || video.frame_count;
   const s = job.stats;
@@ -171,15 +228,21 @@ function Results({ job, video }: { job: Job; video: Video }) {
 
   return (
     <>
-      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,1fr)] gap-4">
+      <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.65fr)_minmax(340px,1fr)] gap-5">
         <Panel className="self-start" title="Annotated output" right={<span className="mono normal-case tracking-normal">frame <span className="text-fog">{frame}</span> · {(frame / fps).toFixed(2)} s</span>}>
-          {job.has_output ? (
-            <video ref={player} src={api.outputUrl(job.id)} controls preload="metadata" className="block w-full bg-black aspect-video" />
+          {job.has_output && !videoError ? (
+            <video ref={player} src={api.outputUrl(job.id)} controls preload="metadata" onError={() => setVideoError(true)}
+              className="block w-full bg-black aspect-video" />
           ) : (
-            <Empty title="No output video" />
+            <div className="aspect-video bg-black/40 grid place-items-center">
+              <Empty title={job.has_output ? "This video can't play in the browser" : "No output video"} icon={FileWarning}
+                action={job.has_output ? <a className="btn btn-sm" href={api.outputUrl(job.id)} download><Download size={13} />Download instead</a> : undefined}>
+                {job.has_output && "It was saved in a format browsers can't decode. Restart the backend — older runs are re-encoded automatically on startup."}
+              </Empty>
+            </div>
           )}
-          <div className="flex items-center gap-2 px-3 py-2 border-t border-line min-h-10 flex-wrap">
-            <span className="label mr-1">In frame</span>
+          <div className="flex items-center gap-2 px-4 py-2.5 border-t border-line min-h-12 flex-wrap">
+            <span className="label mr-1">In frame now</span>
             {visibleNow.length === 0 ? <span className="text-slate text-xs">none</span> :
               visibleNow.map((t) => (
                 <button key={t.track_id} onClick={() => setSelected(t.track_id)}>
@@ -189,10 +252,10 @@ function Results({ job, video }: { job: Job; video: Video }) {
           </div>
         </Panel>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-5">
           <Panel title="Run summary">
-            <div className="grid grid-cols-3 gap-x-4 gap-y-4 p-4">
-              <Readout label="Confirmed vessels" value={s?.confirmed_vessels ?? "—"} tone="signal" />
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-5 p-4">
+              <Readout label="Confirmed vessels" value={s?.confirmed_vessels ?? "—"} tone="accent" />
               <Readout label="Peak in frame" value={s?.peak_in_frame ?? "—"} />
               <Readout label="Mean in frame" value={s?.mean_in_frame ?? "—"} />
               <Readout label="Vessel IDs" value={s?.n_tracks ?? "—"} />
@@ -204,7 +267,7 @@ function Results({ job, video }: { job: Job; video: Video }) {
               <Readout label="Tracker" value={job.timing_ms?.tracker_per_frame ?? "—"} unit="ms" />
               <Readout label="Device" value={(job.device ?? "—").toUpperCase()} />
             </div>
-            <p className="px-4 pb-3 text-2xs text-slate leading-relaxed">
+            <p className="px-4 py-3 border-t border-line text-xs text-slate leading-relaxed">
               <span className="text-fog">Confirmed</span> = an ID tracked in ≥ {s?.confirm_min_detections ?? 25} frames. IDs over-count ships when
               one vessel loses its ID and gets a new one. These are counts, not accuracy — compare HOTA / IDF1 against ground truth for that.
             </p>
@@ -227,7 +290,7 @@ function Results({ job, video }: { job: Job; video: Video }) {
           trusted <span className="text-starboard">{fmtPct(s?.horizon_trusted_ratio)}</span> · H-CMC applied <span className="text-signal">{fmtPct(s?.cmc_applied_ratio)}</span>
         </span>}>
           <div className="p-3">
-            {horizon.data ? <HorizonTrace points={horizon.data} height={video.height} totalFrames={total} /> : <span className="text-slate text-xs">loading…</span>}
+            {horizon.data ? <HorizonTrace points={horizon.data} height={video.height} totalFrames={total} /> : <Loading />}
             <p className="mt-2 text-2xs text-slate leading-relaxed">
               Detected horizon height (px) per frame. <span className="text-starboard">Green</span> frames passed the gate (enough strips agree and no vessel sits above the line) and drive H-CMC;
               <span className="text-port"> red</span> frames fall back to no motion compensation.
@@ -242,7 +305,7 @@ function Results({ job, video }: { job: Job; video: Video }) {
         <div className="p-3">
           {counts.data ? (
             <CountTrace points={counts.data} totalFrames={total} playhead={frame} onSeek={seek} peak={s?.peak_in_frame ?? Math.max(1, ...counts.data.map((c) => c.n))} />
-          ) : <span className="text-slate text-xs">loading…</span>}
+          ) : <Loading />}
         </div>
       </Panel>
 
@@ -265,20 +328,26 @@ function Results({ job, video }: { job: Job; video: Video }) {
         )}
       </Panel>
 
-      {selected != null && <VesselDetail jobId={job.id} trackId={selected} fps={fps} onSeek={seek} />}
+      {selected != null && <VesselDetail jobId={job.id} trackId={selected} fps={fps} onSeek={seek} onClose={() => setSelected(null)} />}
     </>
   );
 }
 
-function VesselDetail({ jobId, trackId, fps, onSeek }: { jobId: string; trackId: number; fps: number; onSeek: (f: number) => void }) {
+function VesselDetail({ jobId, trackId, fps, onSeek, onClose }: { jobId: string; trackId: number; fps: number; onSeek: (f: number) => void; onClose: () => void }) {
   const q = useQuery({ queryKey: ["track", jobId, trackId], queryFn: () => api.track(jobId, trackId) });
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { ref.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }); }, [trackId, !!q.data]);
   const t = q.data;
-  if (!t) return <Panel title="Vessel"><div className="p-4 text-slate mono text-xs">loading…</div></Panel>;
+  if (!t) return <div ref={ref}><Panel title="Vessel"><Loading /></Panel></div>;
   const c = idColour(t.track_id);
 
   return (
-    <Panel title={<span className="flex items-center gap-2 normal-case tracking-normal"><VesselTag id={t.track_id} active /> history</span>}
-      right={<button className="normal-case tracking-normal hover:text-fog" onClick={() => onSeek(t.first_frame)}>jump to first sighting →</button>}>
+    <div ref={ref}>
+    <Panel title={<span className="flex items-center gap-2 normal-case tracking-normal"><VesselTag id={t.track_id} active /> Vessel history</span>}
+      right={<>
+        <button className="btn btn-sm" onClick={() => onSeek(t.first_frame)}>Jump to first sighting</button>
+        <button className="btn btn-sm btn-ghost btn-icon" onClick={onClose} aria-label="Close vessel detail"><X size={14} /></button>
+      </>}>
       <div className="flex border-b border-line">
       {t.has_photo && (
         <button className="shrink-0 w-56 bg-deep border-r border-line flex items-center justify-center p-2"
@@ -326,5 +395,6 @@ function VesselDetail({ jobId, trackId, fps, onSeek }: { jobId: string; trackId:
         </div>
       </div>
     </Panel>
+    </div>
   );
 }

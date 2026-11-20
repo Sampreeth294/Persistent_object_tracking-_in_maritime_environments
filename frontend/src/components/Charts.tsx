@@ -15,7 +15,12 @@ export function CountTrace({ points, totalFrames, playhead, onSeek, peak }: {
   });
   if (points.length) d += `H${W}`;
   const area = points.length ? `${d}V${H}H${x(points[0].frame)}Z` : "";
-  const current = points.length ? points[Math.min(points.length - 1, Math.max(0, Math.round((playhead / Math.max(totalFrames, 1)) * (points.length - 1))))].n : 0;
+  // Last sample at or before the playhead (points are sorted by frame; may be sub-sampled)
+  let current = 0;
+  for (let lo = 0, hi = points.length - 1; lo <= hi;) {
+    const mid = (lo + hi) >> 1;
+    if (points[mid].frame <= playhead) { current = points[mid].n; lo = mid + 1; } else hi = mid - 1;
+  }
   const ticks = Array.from(new Set([0, Math.round(top / 2), top]));
 
   const seek = (e: MouseEvent<HTMLDivElement>) => {
@@ -35,11 +40,17 @@ export function CountTrace({ points, totalFrames, playhead, onSeek, peak }: {
           {ticks.map((t) => (
             <line key={t} x1={0} x2={W} y1={y(t)} y2={y(t)} stroke="rgb(var(--line))" vectorEffect="non-scaling-stroke" />
           ))}
-          <path d={area} fill="rgb(var(--sky) / 0.12)" />
-          <path d={d} fill="none" stroke="rgb(var(--sky))" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          <defs>
+            <linearGradient id="count-fill" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0" stopColor="rgb(var(--accent))" stopOpacity="0.28" />
+              <stop offset="1" stopColor="rgb(var(--accent))" stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          <path d={area} fill="url(#count-fill)" />
+          <path d={d} fill="none" stroke="rgb(var(--accent))" strokeWidth={1.75} vectorEffect="non-scaling-stroke" />
         </svg>
         <div className="pointer-events-none absolute inset-y-0 w-px bg-signal" style={{ left: `${(playhead / Math.max(totalFrames, 1)) * 100}%` }}>
-          <span className="absolute bottom-1 left-1.5 mono text-2xs text-signal bg-deep/90 px-1 whitespace-nowrap">{current} in frame</span>
+          <span className="absolute top-1 left-1.5 mono text-2xs text-signal bg-deep/90 px-1.5 py-0.5 rounded whitespace-nowrap">{current} in frame</span>
         </div>
       </div>
     </div>
