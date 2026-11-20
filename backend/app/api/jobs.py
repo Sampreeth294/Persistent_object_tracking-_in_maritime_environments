@@ -48,6 +48,11 @@ def cancel_job(job_id: str):
     return {"ok": True}
 
 
+@router.delete("/{job_id}", status_code=204)
+def delete_job(job_id: str):
+    job_service.delete(job_id)
+
+
 @router.get("/{job_id}/tracks")
 def list_tracks(job_id: str):
     _require(job_id)

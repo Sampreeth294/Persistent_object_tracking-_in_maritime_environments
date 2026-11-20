@@ -30,6 +30,13 @@ def update(job_id: str, **fields) -> None:
 
 
 def request_cancel(job_id: str) -> bool:
+    # A queued job has not started: cancel it now instead of waiting for the worker to reach it
+    res = get_db().tracking_jobs.update_one(
+        {"_id": to_object_id(job_id), "status": "queued"},
+        {"$set": {"cancel_requested": True, "status": "cancelled", "finished_at": now()}},
+    )
+    if res.modified_count == 1:
+        return True
     res = get_db().tracking_jobs.update_one(
         {"_id": to_object_id(job_id), "status": {"$in": list(ACTIVE)}},
         {"$set": {"cancel_requested": True}},
@@ -53,6 +60,10 @@ def mark_interrupted() -> int:
 
 def queued_ids() -> list[str]:
     return [str(d["_id"]) for d in get_db().tracking_jobs.find({"status": "queued"}, {"_id": 1}).sort("created_at", 1)]
+
+
+def delete(job_id: str) -> None:
+    get_db().tracking_jobs.delete_one({"_id": to_object_id(job_id)})
 
 
 def delete_for_video(video_id: str) -> list[str]:

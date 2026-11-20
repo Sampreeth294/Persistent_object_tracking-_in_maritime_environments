@@ -93,3 +93,21 @@ def test_unknown_tracker(client, tmp_path):
     with clip.open("rb") as f:
         vid = client.post("/api/videos", files={"file": ("clip.avi", f, "video/x-msvideo")}).json()["id"]
     assert client.post("/api/jobs", json={"video_id": vid, "tracker": "magic"}).status_code == 400
+
+
+def test_cancel_queued_and_delete_job(client, tmp_path, monkeypatch):
+    from app.workers import runner
+    monkeypatch.setattr(runner, "enqueue", lambda job_id: None)  # keep the job queued
+    clip = tmp_path / "clip.avi"
+    make_video(clip)
+    with clip.open("rb") as f:
+        vid = client.post("/api/videos", files={"file": ("clip.avi", f, "video/x-msvideo")}).json()["id"]
+    job = client.post("/api/jobs", json={"video_id": vid, "tracker": "bytetrack"}).json()
+    assert job["status"] == "queued"
+    assert client.delete(f"/api/jobs/{job['id']}").status_code == 409   # active runs can't be deleted
+
+    assert client.post(f"/api/jobs/{job['id']}/cancel").status_code == 200
+    assert client.get(f"/api/jobs/{job['id']}").json()["status"] == "cancelled"  # immediately, not on dequeue
+
+    assert client.delete(f"/api/jobs/{job['id']}").status_code == 204
+    assert client.get(f"/api/jobs/{job['id']}").status_code == 404

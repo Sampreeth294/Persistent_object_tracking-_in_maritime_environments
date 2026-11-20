@@ -36,6 +36,7 @@ FRAME_BATCH = 100       # write frame documents to MongoDB in batches
 PROGRESS_EVERY = 15     # update progress / check cancel every N frames
 LIVE_EVERY = 5          # refresh the live preview image every N frames
 CONFIRM_MIN_DETECTIONS = 25  # a vessel ID seen in >= 25 frames (1 s at 25 fps) counts as confirmed
+WEBM_MAX_WIDTH = 1280        # fallback browser video (no ffmpeg) is scaled down to this width
 
 
 class Cancelled(Exception):
@@ -52,6 +53,7 @@ def start() -> None:
     if _thread is None or not _thread.is_alive():
         _thread = threading.Thread(target=_loop, name="job-worker", daemon=True)
         _thread.start()
+        threading.Thread(target=repair_legacy_outputs, name="output-repair", daemon=True).start()
 
 
 def enqueue(job_id: str) -> None:
@@ -200,7 +202,7 @@ def _process(job: dict, job_id: str, out_dir: Path) -> dict:
         t["confirmed"] = t["n_detections"] >= CONFIRM_MIN_DETECTIONS
     tracks_repo.insert_tracks(track_docs)
 
-    output_path = _to_browser_mp4(raw_path, out_dir / "annotated.mp4")
+    output_path = _to_browser_video(raw_path, out_dir)
     elapsed = time.perf_counter() - t_start
     return {
         "frames_done": idx,
@@ -225,14 +227,75 @@ def _process(job: dict, job_id: str, out_dir: Path) -> dict:
     }
 
 
-def _to_browser_mp4(raw: Path, final: Path) -> Path:
-    """OpenCV writes mp4v, which most browsers cannot play. Re-encode to H.264 if ffmpeg exists."""
-    if shutil.which("ffmpeg") is None:
-        log.warning("ffmpeg not found: output may not play in the browser (sudo apt install ffmpeg)")
-        return raw
-    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(raw), "-c:v", "libx264",
-           "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(final)]
-    if subprocess.run(cmd).returncode == 0:
+def _ffmpeg_exe() -> str | None:
+    """System ffmpeg, else the static binary bundled with the optional imageio-ffmpeg package."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg  # optional: pip install imageio-ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def _opencv_webm(raw: Path, final: Path) -> bool:
+    """Re-encode to VP8 WebM with OpenCV's own encoder. Slower than ffmpeg, but needs nothing installed."""
+    cap = cv2.VideoCapture(str(raw))
+    if not cap.isOpened():
+        return False
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    # OpenCV's VP8 writer has no bitrate control, so cap the width to keep files and encode time sane
+    scale = min(1.0, WEBM_MAX_WIDTH / max(w, 1))
+    size = (int(w * scale) // 2 * 2, int(h * scale) // 2 * 2)
+    writer = cv2.VideoWriter(str(final), cv2.VideoWriter_fourcc(*"VP80"), fps, size)
+    ok = writer.isOpened()
+    n = 0
+    while ok:
+        got, frame = cap.read()
+        if not got:
+            break
+        writer.write(frame if scale == 1.0 else cv2.resize(frame, size, interpolation=cv2.INTER_AREA))
+        n += 1
+    cap.release()
+    writer.release()
+    if not ok or n == 0 or not final.exists() or final.stat().st_size == 0:
+        final.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def _to_browser_video(raw: Path, out_dir: Path) -> Path:
+    """OpenCV writes mp4v, which browsers cannot play. Re-encode to H.264 MP4, or VP8 WebM as a fallback."""
+    exe = _ffmpeg_exe()
+    if exe:
+        final = out_dir / "annotated.mp4"
+        cmd = [exe, "-y", "-loglevel", "error", "-i", str(raw), "-c:v", "libx264", "-preset", "veryfast",
+               "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(final)]
+        if subprocess.run(cmd).returncode == 0:
+            raw.unlink(missing_ok=True)
+            return final
+    log.warning("ffmpeg not found: encoding WebM with OpenCV instead (install ffmpeg for faster, smaller MP4s)")
+    final = out_dir / "annotated.webm"
+    if _opencv_webm(raw, final):
         raw.unlink(missing_ok=True)
         return final
+    log.error("Could not re-encode %s: the browser may not be able to play it", raw)
     return raw
+
+
+def repair_legacy_outputs() -> None:
+    """Older runs saved only the unplayable mp4v file. Re-encode them once, in the background."""
+    for job in jobs_repo.list_all(status="completed", limit=10000):
+        path = job.get("output_path")
+        if not path or not path.endswith("annotated_raw.mp4") or not Path(path).exists():
+            continue
+        job_id = str(job["_id"])
+        log.info("Re-encoding output of job %s for the browser", job_id)
+        try:
+            final = _to_browser_video(Path(path), Path(path).parent)
+            if str(final) != path:
+                jobs_repo.update(job_id, output_path=str(final))
+        except Exception:
+            log.exception("Re-encoding job %s failed", job_id)
